@@ -14,7 +14,6 @@ export default function Home() {
   const [isRefined, setIsRefined] = useState(false); 
   const [previousConfidence, setPreviousConfidence] = useState<number | null>(null);
   
-  // Track master checklist progress cleanly at root level for Copilot alignment
   const [completed, setCompleted] = useState<boolean[]>([]);
   const [checklistProgress, setChecklistProgress] = useState<{
     now: boolean[];
@@ -25,7 +24,6 @@ export default function Home() {
 
   const resultRef = useRef<HTMLDivElement>(null);
 
-  // Reset checklist tracking states when a brand new plan is loaded
   useEffect(() => {
     if (result) {
       setCompleted(result.checklist?.map(() => false) || []);
@@ -34,6 +32,12 @@ export default function Home() {
         next10: result.timeline?.next_10_minutes?.map(() => false) || [],
         nextHour: result.timeline?.next_hour?.map(() => false) || [],
         today: result.timeline?.today?.map(() => false) || [],
+      });
+
+      // Secure immediate scroll optimization for mobile viewport alignment
+      window.scrollTo({
+        top: 0,
+        behavior: "smooth",
       });
     }
   }, [result]);
@@ -49,10 +53,7 @@ export default function Home() {
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({
-          scenario,
-          situation,
-        }),
+        body: JSON.stringify({ scenario, situation }),
       });
 
       const data = await response.json();
@@ -82,18 +83,9 @@ export default function Home() {
       });
 
       const updatedPlan = await response.json();
-
-      if (!response.ok) {
-        throw new Error(updatedPlan.error || "Failed to refine plan");
-      }
+      if (!response.ok) throw new Error(updatedPlan.error || "Failed to refine plan");
 
       setResult(updatedPlan);
-
-      resultRef.current?.scrollIntoView({
-        behavior: "smooth",
-        block: "start",
-      });
-
       setIsRefined(true);
       setAnswers({});
     } catch (error) {
@@ -104,82 +96,70 @@ export default function Home() {
   };
 
   const scenarios = [
-    {
-      emoji: "📱",
-      label: "Phone Lost",
-      value: "Phone Lost or Stolen",
-    },
-    {
-      emoji: "💳",
-      label: "Scam / Fraud",
-      value: "Online Scam or Fraud",
-    },
-    {
-      emoji: "📄",
-      label: "Lost Documents",
-      value: "Lost Important Documents",
-    },
-    {
-      emoji: "✈️",
-      label: "Missed Flight",
-      value: "Missed Flight or Train",
-    },
-    {
-      emoji: "🔒",
-      label: "Cyber Breach",
-      value: "Cybersecurity Breach",
-    },
-    {
-      emoji: "🚗",
-      label: "Vehicle Breakdown",
-      value: "Car or Bike Breakdown",
-    },
+    { emoji: "📱", label: "Phone Lost", value: "Phone Lost or Stolen" },
+    { emoji: "💳", label: "Scam / Fraud", value: "Online Scam or Fraud" },
+    { emoji: "📄", label: "Lost Documents", value: "Lost Important Documents" },
+    { emoji: "✈️", label: "Missed Flight", value: "Missed Flight or Train" },
+    { emoji: "🔒", label: "Cyber Breach", value: "Cybersecurity Breach" },
+    { emoji: "🚗", label: "Vehicle Breakdown", value: "Car or Bike Breakdown" },
   ];
 
+  // PHASE CONTROL: Clean viewport management (Analyze -> Loading -> Results)
+  if (loading) {
+    return <LoadingScreen />;
+  }
+
   return (
-    <main className="max-w-4xl mx-auto p-6">
-      {loading && <LoadingScreen />}
+    <main className="max-w-4xl mx-auto p-6 min-h-screen flex flex-col justify-between">
+      {!result ? (
+        <div className="animate-fadeIn">
+          <h1 className="text-4xl font-bold mb-2">NextMove</h1>
+          <p className="text-gray-500 mb-6">When every minute matters, know your next move.</p>
 
-      <h1 className="text-4xl font-bold mb-2">NextMove</h1>
-      <p className="text-gray-500 mb-6">When every minute matters, know your next move.</p>
+          <div className="mb-6">
+            <h2 className="font-semibold mb-3">Select a Scenario</h2>
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+              {scenarios.map((item) => (
+                <button
+                  key={item.value}
+                  type="button"
+                  onClick={() => setScenario(item.value)}
+                  className={`border rounded-xl p-4 text-left transition ${
+                    scenario === item.value ? "border-black bg-gray-100" : "hover:bg-gray-50"
+                  }`}
+                >
+                  <div className="text-2xl mb-2">{item.emoji}</div>
+                  <div className="font-medium">{item.label}</div>
+                </button>
+              ))}
+            </div>
+          </div>
 
-      <div className="mb-6">
-        <h2 className="font-semibold mb-3">Select a Scenario</h2>
-        <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-          {scenarios.map((item) => (
-            <button
-              key={item.value}
-              type="button"
-              onClick={() => setScenario(item.value)}
-              className={`border rounded-xl p-4 text-left transition ${
-                scenario === item.value ? "border-black bg-gray-100" : "hover:bg-gray-50"
-              }`}
-            >
-              <div className="text-2xl mb-2">{item.emoji}</div>
-              <div className="font-medium">{item.label}</div>
-            </button>
-          ))}
+          <textarea
+            className="border rounded-xl p-4 w-full focus:outline-none focus:ring-1 focus:ring-black"
+            rows={6}
+            value={situation}
+            onChange={(e) => setSituation(e.target.value)}
+            placeholder="Describe your situation..."
+          />
+
+          <button
+            className="bg-black text-white px-6 py-3 rounded-xl mt-4 w-full md:w-auto font-medium transition active:scale-98"
+            onClick={handleAnalyze}
+            disabled={!scenario || !situation}
+          >
+            Analyze Situation
+          </button>
         </div>
-      </div>
-
-      <textarea
-        className="border rounded-xl p-4 w-full"
-        rows={6}
-        value={situation}
-        onChange={(e) => setSituation(e.target.value)}
-        placeholder="Describe your situation..."
-      />
-
-      <button
-        className="bg-black text-white px-6 py-3 rounded-xl mt-4"
-        onClick={handleAnalyze}
-        disabled={loading}
-      >
-        {loading ? "Working..." : "Analyze Situation"}
-      </button>
-
-      {!loading && result && (
-        <div ref={resultRef}>
+      ) : (
+        <div ref={resultRef} className="animate-fadeIn space-y-8 pb-24">
+          <button 
+            onClick={() => setResult(null)} 
+            className="text-xs font-medium text-gray-400 hover:text-gray-900 transition flex items-center gap-1 mb-2"
+          >
+            ← Analyze another situation
+          </button>
+          
           <ResultScreen
             result={result}
             answers={answers}
@@ -192,19 +172,17 @@ export default function Home() {
             timelineProgress={checklistProgress}
             setTimelineProgress={setChecklistProgress}
           />
-        </div>
-      )}
 
-      {!loading && result && (
-        <div className="mt-8">
-          <CopilotChat
-            situation={situation}
-            scenario={scenario}
-            result={result}
-            answers={answers}
-            completed={completed}
-            timelineProgress={checklistProgress}
-          />
+          <div className="mt-8 pt-6 border-t border-gray-100">
+            <CopilotChat
+              situation={situation}
+              scenario={scenario}
+              result={result}
+              answers={answers}
+              completed={completed}
+              timelineProgress={checklistProgress}
+            />
+          </div>
         </div>
       )}
     </main>
