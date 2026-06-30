@@ -2,7 +2,7 @@
 
 import { exportEmergencyReport } from "@/lib/exportEmergencyReport";
 import StickyCriticalAction from "@/components/StickyCriticalAction";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import EmergencyProgress from "./EmergencyProgress";
 import SituationUpdates from "@/components/SituationUpdates";
 import DecisionReasoning from "@/components/DecisionReasoning";
@@ -11,6 +11,12 @@ import MistakesToAvoid from "@/components/MistakesToAvoid";
 import AnimatedCard from "@/components/AnimatedCard";
 import { motion, AnimatePresence } from "framer-motion";
 import confetti from "canvas-confetti";
+
+type Message = {
+  id: string;
+  sender: "user" | "copilot";
+  text: string;
+};
 
 type ResultScreenProps = {
   result: any;
@@ -51,6 +57,15 @@ export default function ResultScreen({
 }: ResultScreenProps) {
   const [secondsLeft, setSecondsLeft] = useState(600); 
   const [hourSecondsLeft, setHourSecondsLeft] = useState(3600); 
+
+  // Copilot-specific inline chat infrastructure
+  const [chatInput, setChatInput] = useState("");
+  const [messages, setMessages] = useState<Message[]>([]);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
 
   useEffect(() => {
     if (result?.timeline) {
@@ -149,6 +164,23 @@ export default function ResultScreen({
 
       return updated;
     });
+  };
+
+  const handleSendCopilotMessage = (textToSend: string) => {
+    if (!textToSend.trim()) return;
+
+    const userMsg: Message = { id: Math.random().toString(), sender: "user", text: textToSend };
+    setMessages((prev) => [...prev, userMsg]);
+    setChatInput("");
+
+    setTimeout(() => {
+      const copilotMsg: Message = {
+        id: Math.random().toString(),
+        sender: "copilot",
+        text: `Analyzing threat variables against your active parameters. Continue executing the immediate visual checklists while I process this entry fallback.`
+      };
+      setMessages((prev) => [...prev, copilotMsg]);
+    }, 600);
   };
 
   return (
@@ -305,6 +337,76 @@ export default function ResultScreen({
           </div>
         </div>
       )}
+
+      {/* 🛠️ RESTORED NEXTMOVE COPILOT CORE INTERFACE INTERACTIVE BLOCK */}
+      <div className="bg-[#FFF5F5] border border-red-100/60 rounded-[24px] p-5 space-y-4 shadow-3xs">
+        <div>
+          <h2 className="text-base font-bold text-gray-900 flex items-center gap-2 font-serif">
+            💬 NextMove Copilot
+          </h2>
+          <p className="text-xs text-gray-500 mt-0.5 leading-relaxed">
+            Ask follow-up questions about your situation. Get step-by-step guidance.
+          </p>
+        </div>
+
+        <div className="flex flex-wrap gap-2">
+          <span className="inline-flex items-center text-[10px] font-bold bg-red-600 text-white px-3 py-1 rounded-full shadow-3xs">
+            🚨 Emergency Mode ON
+          </span>
+        </div>
+
+        <div className="bg-white border border-gray-100/80 rounded-xl p-4 min-h-[150px] max-h-[240px] overflow-y-auto flex flex-col gap-3">
+          {messages.length === 0 ? (
+            <div className="my-auto text-center py-4 px-2">
+              <p className="text-xs text-gray-400 leading-relaxed max-w-[220px] mx-auto">
+                No active conversations. Tap an analytical shortcut chip below to initiate dialogue telemetry.
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-2.5 text-xs">
+              {messages.map((msg) => (
+                <div
+                  key={msg.id}
+                  className={`p-3 rounded-xl max-w-[85%] leading-relaxed ${
+                    msg.sender === "user" ? "ml-auto bg-gray-900 text-white rounded-br-none" : "bg-gray-50 text-gray-800 border border-gray-100 rounded-bl-none"
+                  }`}
+                >
+                  {msg.text}
+                </div>
+              ))}
+              <div ref={messagesEndRef} />
+            </div>
+          )}
+        </div>
+
+        <div className="flex flex-col gap-1.5 pt-1">
+          <button type="button" onClick={() => handleSendCopilotMessage("What's my next priority?")} className="w-fit bg-white border border-gray-200 text-gray-700 px-3.5 py-1.5 rounded-xl text-xs font-medium shadow-3xs active:scale-95 transition">
+            🎯 What's my next priority?
+          </button>
+          <button type="button" onClick={() => handleSendCopilotMessage("Am I safe now?")} className="w-fit bg-white border border-gray-200 text-gray-700 px-3.5 py-1.5 rounded-xl text-xs font-medium shadow-3xs active:scale-95 transition">
+            🛡️ Am I safe now?
+          </button>
+        </div>
+
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            handleSendCopilotMessage(chatInput);
+          }}
+          className="bg-white border border-gray-200 p-1.5 rounded-xl flex items-center gap-2 shadow-3xs"
+        >
+          <input
+            type="text"
+            value={chatInput}
+            onChange={(e) => setChatInput(e.target.value)}
+            placeholder="Type a custom query..."
+            className="flex-1 text-xs px-2.5 py-2 bg-transparent focus:outline-none"
+          />
+          <button type="submit" disabled={!chatInput.trim()} className="bg-gray-900 disabled:opacity-30 text-white px-4 py-2 rounded-lg text-xs font-semibold transition">
+            Send
+          </button>
+        </form>
+      </div>
 
       <SituationUpdates updates={result.situation_updates} />
 
