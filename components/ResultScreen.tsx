@@ -58,14 +58,19 @@ export default function ResultScreen({
   const [secondsLeft, setSecondsLeft] = useState(600); 
   const [hourSecondsLeft, setHourSecondsLeft] = useState(3600); 
 
-  // Copilot-specific inline chat infrastructure
+  // Tab State: "analyze" or "copilot"
+  const [activeTab, setActiveTab] = useState<"analyze" | "copilot">("analyze");
+
+  // Copilot States
   const [chatInput, setChatInput] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+    if (activeTab === "copilot") {
+      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [messages, activeTab]);
 
   useEffect(() => {
     if (result?.timeline) {
@@ -184,323 +189,362 @@ export default function ResultScreen({
   };
 
   return (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-10">
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="pb-24 space-y-10">
       {result.critical_action && remainingActionsCount > 0 && (
         <StickyCriticalAction title={result.critical_action.title} estimatedTime={result.critical_action.estimated_time} severity={dynamicSeverity} />
       )}
 
-      {/* EMERGENCY STATUS HERO DASHBOARD */}
-      <AnimatedCard delay={0.05}>
-        <div className="rounded-2xl border border-gray-100 bg-white p-6 shadow-xs">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-gray-100 pb-4 mb-4 gap-3">
-            <div>
-              <span className="text-[10px] font-semibold uppercase tracking-wider text-gray-400">Current Protocol</span>
-              <h1 className="text-xl font-bold tracking-tight text-gray-900">{result.scenario}</h1>
+      {/* RENDER ANALYZE VIEW */}
+      {activeTab === "analyze" && (
+        <div className="space-y-10">
+          {/* EMERGENCY STATUS HERO DASHBOARD */}
+          <AnimatedCard delay={0.05}>
+            <div className="rounded-2xl border border-gray-100 bg-white p-6 shadow-xs">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-gray-100 pb-4 mb-4 gap-3">
+                <div>
+                  <span className="text-[10px] font-semibold uppercase tracking-wider text-gray-400">Current Protocol</span>
+                  <h1 className="text-xl font-bold tracking-tight text-gray-900">{result.scenario}</h1>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button 
+                    onClick={onReset}
+                    className="rounded-full border border-gray-200 bg-white px-3 py-1 text-xs font-medium text-gray-600 hover:bg-gray-50 active:scale-95 transition shadow-2xs"
+                  >
+                    🔄 New Analysis
+                  </button>
+                  <span className={`rounded-full px-2.5 py-1 text-xs font-semibold border ${severityColor}`}>
+                    Status: {dynamicSeverity}
+                  </span>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-xs">
+                <div>
+                  <div className="text-gray-400 font-medium">Recovery Progress</div>
+                  <div className="text-lg font-bold text-gray-900 mt-0.5">{recoveryScore}%</div>
+                </div>
+                <div>
+                  <div className="text-gray-400 font-medium">Remaining Tasks</div>
+                  <div className="text-lg font-bold text-gray-900 mt-0.5">{remainingActionsCount} actions</div>
+                </div>
+                <div>
+                  <div className="text-gray-400 font-medium">Est. Resolution</div>
+                  <div className="text-lg font-bold text-gray-900 mt-0.5">{result.estimated_resolution_time || "Pending"}</div>
+                </div>
+                <div>
+                  <div className="text-gray-400 font-medium">Plan Confidence</div>
+                  <div className="text-lg font-bold text-blue-600 mt-0.5">{result.confidence}%</div>
+                </div>
+              </div>
+
+              <div className="mt-4 pt-3 border-t border-gray-50 text-xs text-gray-500 leading-relaxed">
+                {result.summary}
+              </div>
             </div>
-            <div className="flex items-center gap-2">
-              <button 
-                onClick={onReset}
-                className="rounded-full border border-gray-200 bg-white px-3 py-1 text-xs font-medium text-gray-600 hover:bg-gray-50 active:scale-95 transition shadow-2xs"
-              >
-                🔄 New Analysis
+          </AnimatedCard>
+
+          {/* EXECUTE TIMELINE BLOCK */}
+          <div className="space-y-4">
+            <h2 className="text-sm font-semibold uppercase tracking-wider text-gray-400">Execute Plan</h2>
+            <div className="border border-gray-100 bg-white rounded-2xl p-5 shadow-xs flex flex-col gap-5">
+              
+              <TimelineSection
+                title="🚨 Right Now"
+                items={result.timeline?.now}
+                completed={timelineProgress?.now || []}
+                onToggle={(index) => handleToggleAction("now", index)}
+              />
+              
+              <AnimatePresence>
+                {nowComplete && hasNow && !next10Complete && (
+                  <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }}>
+                    <div className="bg-green-50 border border-green-100 text-green-800 rounded-xl p-3.5 text-xs flex items-center gap-2 font-medium">
+                      ✅ Immediate danger isolated. Proceed smoothly below.
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
+              <TimelineSection
+                title="⏱ Next 10 Minutes"
+                items={result.timeline?.next_10_minutes}
+                completed={timelineProgress?.next10 || []}
+                locked={!nowComplete}
+                countdownText={secondsLeft > 0 ? `${Math.floor(secondsLeft / 60)}:${secondsLeft % 60 < 10 ? "0" : ""}${secondsLeft % 60} left` : "0:00 overdue"}
+                onToggle={(index) => handleToggleAction("next10", index)}
+                isFrozen={next10Complete}
+              />
+
+              <AnimatePresence>
+                {next10Complete && hasNext10 && !nextHourComplete && (
+                  <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }}>
+                    <div className="bg-green-50 border border-green-100 text-green-800 rounded-xl p-3.5 text-xs flex items-center gap-2 font-medium">
+                      ✅ Situation secured. Transition to recovery steps.
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
+              <TimelineSection
+                title="🕐 Next Hour"
+                items={result.timeline?.next_hour}
+                completed={timelineProgress?.nextHour || []}
+                locked={!next10Complete}
+                countdownText={hourSecondsLeft > 0 ? `${Math.floor(hourSecondsLeft / 60)}:${hourSecondsLeft % 60 < 10 ? "0" : ""}${hourSecondsLeft % 60} left` : "0:00 overdue"}
+                onToggle={(index) => handleToggleAction("nextHour", index)}
+                isFrozen={nextHourComplete}
+              />
+
+              <AnimatePresence>
+                {nextHourComplete && hasNextHour && !todayComplete && (
+                  <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }}>
+                    <div className="bg-green-50 border border-green-100 text-green-800 rounded-xl p-3.5 text-xs flex items-center gap-2 font-medium">
+                      ✅ Great work. Just a few administrative tasks left today.
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
+              <TimelineSection
+                title="📅 Today"
+                items={result.timeline?.today}
+                completed={timelineProgress?.today || []}
+                locked={!nextHourComplete}
+                onToggle={(index) => handleToggleAction("today", index)}
+              />
+            </div>
+          </div>
+
+          {/* ACTIONS & EMERGENCY HOTLINES */}
+          {result.important_contacts?.length > 0 && (
+            <div className="space-y-3">
+              <h2 className="text-xs font-semibold uppercase tracking-wider text-gray-400">Actionable Links & Contacts</h2>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                {result.important_contacts.map((contact: string, index: number) => {
+                  const parts = contact.split(/[:\-]/);
+                  const label = parts[0]?.trim() || "Helpline";
+                  const targetValue = parts.slice(1).join(":")?.trim() || "";
+                  const isWebPortal = /www\.|http|\.gov|\.in|\.com/i.test(targetValue);
+
+                  return (
+                    <div key={index} className="flex items-center justify-between border border-gray-100 bg-white rounded-xl p-3.5 shadow-xs">
+                      <div className="pr-2 truncate">
+                        <div className="text-xs font-medium text-gray-800 flex items-center gap-1">📞 {label}</div>
+                        <div className="text-[10px] text-gray-400 mt-0.5 truncate">{targetValue}</div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {isWebPortal ? (
+                          <a href={targetValue.startsWith("http") ? targetValue : `https://${targetValue}`} target="_blank" rel="noopener noreferrer" className="rounded-lg border bg-white px-2.5 py-1 text-xs font-medium text-blue-600 hover:bg-gray-50 transition shadow-2xs">Open Link</a>
+                        ) : (
+                          <a href={`tel:${targetValue.replace(/\s+/g, "")}`} className="rounded-lg border bg-white px-2.5 py-1 text-xs font-medium text-blue-600 hover:bg-gray-50 transition shadow-2xs">Call</a>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          <SituationUpdates updates={result.situation_updates} />
+
+          {/* METRICS TRACKER PANELS */}
+          <div className="space-y-6 pt-2 border-t border-gray-100">
+            <div className="space-y-3">
+              <h2 className="text-xs font-semibold uppercase tracking-wider text-gray-400">Recovery Metrics</h2>
+              <EmergencyProgress completed={completedTimelineItems} total={totalTimelineItems} progress={recoveryScore} />
+            </div>
+
+            <div className="space-y-3">
+              <h2 className="text-xs font-semibold uppercase tracking-wider text-gray-400">Threat Risk Analysis</h2>
+              <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-xs space-y-3.5">
+                {sortedRisks.map((risk: any, index: number) => (
+                  <div key={index} className="flex flex-col gap-1">
+                    <div className="flex justify-between items-center text-xs text-gray-600">
+                      <span className={index === 0 ? "font-medium text-gray-900" : ""}>{index === 0 ? "⚠️ " : ""}{risk.type}</span>
+                      <span className="text-gray-400 font-mono text-[11px]">{risk.level}%</span>
+                    </div>
+                    <div className="h-1 w-full rounded-full bg-gray-50">
+                      <div className={`h-1 rounded-full transition-all duration-300 ${index === 0 ? "bg-amber-500" : "bg-amber-400/50"}`} style={{ width: `${risk.level}%` }} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* ACCORDION MATRIX BLOCKS */}
+          <div className="space-y-2 pt-2 border-t border-gray-100">
+            <h2 className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-3">Context & Diagnostics</h2>
+            <details className="group border border-gray-100 bg-white rounded-xl shadow-2xs overflow-hidden [&_summary::-webkit-details-marker]:hidden">
+              <summary className="flex justify-between items-center p-4 text-xs font-medium text-gray-700 cursor-pointer select-none hover:bg-gray-50 transition">
+                <span>🧠 Strategy Logic Matrix</span>
+                <span className="text-gray-400 transition group-open:rotate-180">↓</span>
+              </summary>
+              <div className="p-4 pt-0 border-t border-gray-50 bg-gray-50/10 text-xs text-gray-600">
+                <DecisionReasoning reasoning={result.decision_reasoning} />
+              </div>
+            </details>
+            <details className="group border border-gray-100 bg-white rounded-xl shadow-2xs overflow-hidden [&_summary::-webkit-details-marker]:hidden">
+              <summary className="flex justify-between items-center p-4 text-xs font-medium text-gray-700 cursor-pointer select-none hover:bg-gray-50 transition">
+                <span>❌ Critical Actions to Avoid</span>
+                <span className="text-gray-400 transition group-open:rotate-180">↓</span>
+              </summary>
+              <div className="p-4 pt-0 border-t border-gray-50 bg-gray-50/10 text-xs text-gray-600">
+                <MistakesToAvoid mistakes={result.mistakes_to_avoid} />
+              </div>
+            </details>
+            <details className="group border border-gray-100 bg-white rounded-xl shadow-2xs overflow-hidden [&_summary::-webkit-details-marker]:hidden">
+              <summary className="flex justify-between items-center p-4 text-xs font-medium text-gray-700 cursor-pointer select-none hover:bg-gray-50 transition">
+                <span>🔄 Contingency Paths</span>
+                <span className="text-gray-400 transition group-open:rotate-180">↓</span>
+              </summary>
+              <div className="p-4 pt-0 border-t border-gray-50 bg-gray-50/10 text-xs text-gray-600">
+                <AlternativeActions actions={result.alternative_actions} />
+              </div>
+            </details>
+          </div>
+
+          {/* REFINEMENT FOOTER */}
+          <div className="space-y-4 pt-2 border-t border-gray-100">
+            {result.follow_up_questions?.length > 0 && (
+              <div className="space-y-3">
+                <h2 className="text-xs font-semibold uppercase tracking-wider text-gray-400">Refine Analysis</h2>
+                <div className="space-y-2">
+                  {result.follow_up_questions.map((question: string, index: number) => (
+                    <div key={index} className="border border-blue-50 rounded-xl p-3 bg-blue-50/10">
+                      <p className="text-xs font-medium text-gray-700 mb-2">❓ {question}</p>
+                      <input
+                        type="text"
+                        placeholder="Provide additional details..."
+                        value={answers[question] || ""}
+                        onChange={(e) => setAnswers({ ...answers, [question]: e.target.value })}
+                        className="w-full text-xs border bg-white rounded-lg p-2 focus:outline-none focus:ring-1 focus:ring-blue-300 shadow-2xs"
+                      />
+                    </div>
+                  ))}
+                </div>
+                <button onClick={onRefine} className="w-full rounded-xl bg-blue-600 py-2.5 text-xs font-medium text-white hover:bg-blue-700 shadow-xs transition">
+                  Update Strategic Protocol
+                </button>
+              </div>
+            )}
+
+            <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-xs flex items-center justify-between gap-4">
+              <div>
+                <h3 className="text-xs font-medium text-gray-900">📄 Local Defensive Report</h3>
+                <p className="text-[11px] text-gray-400 mt-0.5">Persist report locally for completely offline access.</p>
+              </div>
+              <button onClick={() => exportEmergencyReport(result, answers)} className="rounded-xl bg-gray-900 px-3.5 py-2 text-xs font-medium text-white hover:bg-gray-800 transition shadow-xs">
+                Save Offline
               </button>
-              <span className={`rounded-full px-2.5 py-1 text-xs font-semibold border ${severityColor}`}>
-                Status: {dynamicSeverity}
-              </span>
             </div>
-          </div>
-
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-xs">
-            <div>
-              <div className="text-gray-400 font-medium">Recovery Progress</div>
-              <div className="text-lg font-bold text-gray-900 mt-0.5">{recoveryScore}%</div>
-            </div>
-            <div>
-              <div className="text-gray-400 font-medium">Remaining Tasks</div>
-              <div className="text-lg font-bold text-gray-900 mt-0.5">{remainingActionsCount} actions</div>
-            </div>
-            <div>
-              <div className="text-gray-400 font-medium">Est. Resolution</div>
-              <div className="text-lg font-bold text-gray-900 mt-0.5">{result.estimated_resolution_time || "Pending"}</div>
-            </div>
-            <div>
-              <div className="text-gray-400 font-medium">Plan Confidence</div>
-              <div className="text-lg font-bold text-blue-600 mt-0.5">{result.confidence}%</div>
-            </div>
-          </div>
-
-          <div className="mt-4 pt-3 border-t border-gray-50 text-xs text-gray-500 leading-relaxed">
-            {result.summary}
-          </div>
-        </div>
-      </AnimatedCard>
-
-      {/* EXECUTE TIMELINE BLOCK */}
-      <div className="space-y-4">
-        <h2 className="text-sm font-semibold uppercase tracking-wider text-gray-400">Execute Plan</h2>
-        <div className="border border-gray-100 bg-white rounded-2xl p-5 shadow-xs flex flex-col gap-5">
-          
-          <TimelineSection
-            title="🚨 Right Now"
-            items={result.timeline?.now}
-            completed={timelineProgress?.now || []}
-            onToggle={(index) => handleToggleAction("now", index)}
-          />
-          
-          <AnimatePresence>
-            {nowComplete && hasNow && !next10Complete && (
-              <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }}>
-                <div className="bg-green-50 border border-green-100 text-green-800 rounded-xl p-3.5 text-xs flex items-center gap-2 font-medium">
-                  ✅ Immediate danger isolated. Proceed smoothly below.
-                </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
-
-          <TimelineSection
-            title="⏱ Next 10 Minutes"
-            items={result.timeline?.next_10_minutes}
-            completed={timelineProgress?.next10 || []}
-            locked={!nowComplete}
-            countdownText={secondsLeft > 0 ? `${Math.floor(secondsLeft / 60)}:${secondsLeft % 60 < 10 ? "0" : ""}${secondsLeft % 60} left` : "0:00 overdue"}
-            onToggle={(index) => handleToggleAction("next10", index)}
-            isFrozen={next10Complete}
-          />
-
-          <AnimatePresence>
-            {next10Complete && hasNext10 && !nextHourComplete && (
-              <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }}>
-                <div className="bg-green-50 border border-green-100 text-green-800 rounded-xl p-3.5 text-xs flex items-center gap-2 font-medium">
-                  ✅ Situation secured. Transition to recovery steps.
-                </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
-
-          <TimelineSection
-            title="🕐 Next Hour"
-            items={result.timeline?.next_hour}
-            completed={timelineProgress?.nextHour || []}
-            locked={!next10Complete}
-            countdownText={hourSecondsLeft > 0 ? `${Math.floor(hourSecondsLeft / 60)}:${hourSecondsLeft % 60 < 10 ? "0" : ""}${hourSecondsLeft % 60} left` : "0:00 overdue"}
-            onToggle={(index) => handleToggleAction("nextHour", index)}
-            isFrozen={nextHourComplete}
-          />
-
-          <AnimatePresence>
-            {nextHourComplete && hasNextHour && !todayComplete && (
-              <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }}>
-                <div className="bg-green-50 border border-green-100 text-green-800 rounded-xl p-3.5 text-xs flex items-center gap-2 font-medium">
-                  ✅ Great work. Just a few administrative tasks left today.
-                </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
-
-          <TimelineSection
-            title="📅 Today"
-            items={result.timeline?.today}
-            completed={timelineProgress?.today || []}
-            locked={!nextHourComplete}
-            onToggle={(index) => handleToggleAction("today", index)}
-          />
-        </div>
-      </div>
-
-      {/* ACTIONS & EMERGENCY HOTLINES */}
-      {result.important_contacts?.length > 0 && (
-        <div className="space-y-3">
-          <h2 className="text-xs font-semibold uppercase tracking-wider text-gray-400">Actionable Links & Contacts</h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-            {result.important_contacts.map((contact: string, index: number) => {
-              const parts = contact.split(/[:\-]/);
-              const label = parts[0]?.trim() || "Helpline";
-              const targetValue = parts.slice(1).join(":")?.trim() || "";
-              const isWebPortal = /www\.|http|\.gov|\.in|\.com/i.test(targetValue);
-
-              return (
-                <div key={index} className="flex items-center justify-between border border-gray-100 bg-white rounded-xl p-3.5 shadow-xs">
-                  <div className="pr-2 truncate">
-                    <div className="text-xs font-medium text-gray-800 flex items-center gap-1">📞 {label}</div>
-                    <div className="text-[10px] text-gray-400 mt-0.5 truncate">{targetValue}</div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {isWebPortal ? (
-                      <a href={targetValue.startsWith("http") ? targetValue : `https://${targetValue}`} target="_blank" rel="noopener noreferrer" className="rounded-lg border bg-white px-2.5 py-1 text-xs font-medium text-blue-600 hover:bg-gray-50 transition shadow-2xs">Open Link</a>
-                    ) : (
-                      <a href={`tel:${targetValue.replace(/\s+/g, "")}`} className="rounded-lg border bg-white px-2.5 py-1 text-xs font-medium text-blue-600 hover:bg-gray-50 transition shadow-2xs">Call</a>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
           </div>
         </div>
       )}
 
-      {/* 🛠️ RESTORED NEXTMOVE COPILOT CORE INTERFACE INTERACTIVE BLOCK */}
-      <div className="bg-[#FFF5F5] border border-red-100/60 rounded-[24px] p-5 space-y-4 shadow-3xs">
-        <div>
-          <h2 className="text-base font-bold text-gray-900 flex items-center gap-2 font-serif">
-            💬 NextMove Copilot
-          </h2>
-          <p className="text-xs text-gray-500 mt-0.5 leading-relaxed">
-            Ask follow-up questions about your situation. Get step-by-step guidance.
-          </p>
-        </div>
-
-        <div className="flex flex-wrap gap-2">
-          <span className="inline-flex items-center text-[10px] font-bold bg-red-600 text-white px-3 py-1 rounded-full shadow-3xs">
-            🚨 Emergency Mode ON
-          </span>
-        </div>
-
-        <div className="bg-white border border-gray-100/80 rounded-xl p-4 min-h-[150px] max-h-[240px] overflow-y-auto flex flex-col gap-3">
-          {messages.length === 0 ? (
-            <div className="my-auto text-center py-4 px-2">
-              <p className="text-xs text-gray-400 leading-relaxed max-w-[220px] mx-auto">
-                No active conversations. Tap an analytical shortcut chip below to initiate dialogue telemetry.
+      {/* RENDER COPILOT VIEW */}
+      {activeTab === "copilot" && (
+        <div className="bg-[#FFF5F5] border border-red-100/60 rounded-[24px] p-5 space-y-4 shadow-3xs min-h-[500px] flex flex-col justify-between">
+          <div className="space-y-4">
+            <div>
+              <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2 font-serif">
+                💬 NextMove Copilot
+              </h2>
+              <p className="text-xs text-gray-500 mt-0.5 leading-relaxed">
+                Ask follow-up questions about your situation. Get step-by-step guidance.
               </p>
             </div>
-          ) : (
-            <div className="space-y-2.5 text-xs">
-              {messages.map((msg) => (
-                <div
-                  key={msg.id}
-                  className={`p-3 rounded-xl max-w-[85%] leading-relaxed ${
-                    msg.sender === "user" ? "ml-auto bg-gray-900 text-white rounded-br-none" : "bg-gray-50 text-gray-800 border border-gray-100 rounded-bl-none"
-                  }`}
-                >
-                  {msg.text}
-                </div>
-              ))}
-              <div ref={messagesEndRef} />
+
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="inline-flex items-center text-[11px] font-bold bg-red-600 text-white px-3 py-1 rounded-full shadow-3xs">
+                🚨 Emergency Mode ON
+              </span>
+              <button 
+                onClick={() => exportEmergencyReport(result, answers)}
+                className="inline-flex items-center text-[11px] font-medium border bg-white border-gray-200 text-gray-600 px-3 py-1 rounded-full shadow-3xs hover:bg-gray-50 transition"
+              >
+                📄 Export Report PDF
+              </button>
             </div>
-          )}
-        </div>
 
-        <div className="flex flex-col gap-1.5 pt-1">
-          <button type="button" onClick={() => handleSendCopilotMessage("What's my next priority?")} className="w-fit bg-white border border-gray-200 text-gray-700 px-3.5 py-1.5 rounded-xl text-xs font-medium shadow-3xs active:scale-95 transition">
-            🎯 What's my next priority?
-          </button>
-          <button type="button" onClick={() => handleSendCopilotMessage("Am I safe now?")} className="w-fit bg-white border border-gray-200 text-gray-700 px-3.5 py-1.5 rounded-xl text-xs font-medium shadow-3xs active:scale-95 transition">
-            🛡️ Am I safe now?
-          </button>
-        </div>
-
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            handleSendCopilotMessage(chatInput);
-          }}
-          className="bg-white border border-gray-200 p-1.5 rounded-xl flex items-center gap-2 shadow-3xs"
-        >
-          <input
-            type="text"
-            value={chatInput}
-            onChange={(e) => setChatInput(e.target.value)}
-            placeholder="Type a custom query..."
-            className="flex-1 text-xs px-2.5 py-2 bg-transparent focus:outline-none"
-          />
-          <button type="submit" disabled={!chatInput.trim()} className="bg-gray-900 disabled:opacity-30 text-white px-4 py-2 rounded-lg text-xs font-semibold transition">
-            Send
-          </button>
-        </form>
-      </div>
-
-      <SituationUpdates updates={result.situation_updates} />
-
-      {/* METRICS TRACKER PANELS */}
-      <div className="space-y-6 pt-2 border-t border-gray-100">
-        <div className="space-y-3">
-          <h2 className="text-xs font-semibold uppercase tracking-wider text-gray-400">Recovery Metrics</h2>
-          <EmergencyProgress completed={completedTimelineItems} total={totalTimelineItems} progress={recoveryScore} />
-        </div>
-
-        <div className="space-y-3">
-          <h2 className="text-xs font-semibold uppercase tracking-wider text-gray-400">Threat Risk Analysis</h2>
-          <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-xs space-y-3.5">
-            {sortedRisks.map((risk: any, index: number) => (
-              <div key={index} className="flex flex-col gap-1">
-                <div className="flex justify-between items-center text-xs text-gray-600">
-                  <span className={index === 0 ? "font-medium text-gray-900" : ""}>{index === 0 ? "⚠️ " : ""}{risk.type}</span>
-                  <span className="text-gray-400 font-mono text-[11px]">{risk.level}%</span>
+            <div className="bg-white border border-gray-100/80 rounded-xl p-4 min-h-[260px] max-h-[380px] overflow-y-auto flex flex-col gap-3">
+              {messages.length === 0 ? (
+                <div className="my-auto text-center py-4 px-2">
+                  <p className="text-xs text-gray-400 leading-relaxed max-w-[260px] mx-auto">
+                    No active conversations. Tap an analytical shortcut chip below to initiate dialogue telemetry.
+                  </p>
                 </div>
-                <div className="h-1 w-full rounded-full bg-gray-50">
-                  <div className={`h-1 rounded-full transition-all duration-300 ${index === 0 ? "bg-amber-500" : "bg-amber-400/50"}`} style={{ width: `${risk.level}%` }} />
+              ) : (
+                <div className="space-y-2.5 text-xs">
+                  {messages.map((msg) => (
+                    <div
+                      key={msg.id}
+                      className={`p-3 rounded-xl max-w-[85%] leading-relaxed ${
+                        msg.sender === "user" ? "ml-auto bg-gray-900 text-white rounded-br-none" : "bg-gray-50 text-gray-800 border border-gray-100 rounded-bl-none"
+                      }`}
+                    >
+                      {msg.text}
+                    </div>
+                  ))}
+                  <div ref={messagesEndRef} />
                 </div>
-              </div>
-            ))}
+              )}
+            </div>
           </div>
-        </div>
-      </div>
 
-      {/* ACCORDION MATRIX BLOCKS */}
-      <div className="space-y-2 pt-2 border-t border-gray-100">
-        <h2 className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-3">Context & Diagnostics</h2>
-        <details className="group border border-gray-100 bg-white rounded-xl shadow-2xs overflow-hidden [&_summary::-webkit-details-marker]:hidden">
-          <summary className="flex justify-between items-center p-4 text-xs font-medium text-gray-700 cursor-pointer select-none hover:bg-gray-50 transition">
-            <span>🧠 Strategy Logic Matrix</span>
-            <span className="text-gray-400 transition group-open:rotate-180">↓</span>
-          </summary>
-          <div className="p-4 pt-0 border-t border-gray-50 bg-gray-50/10 text-xs text-gray-600">
-            <DecisionReasoning reasoning={result.decision_reasoning} />
-          </div>
-        </details>
-        <details className="group border border-gray-100 bg-white rounded-xl shadow-2xs overflow-hidden [&_summary::-webkit-details-marker]:hidden">
-          <summary className="flex justify-between items-center p-4 text-xs font-medium text-gray-700 cursor-pointer select-none hover:bg-gray-50 transition">
-            <span>❌ Critical Actions to Avoid</span>
-            <span className="text-gray-400 transition group-open:rotate-180">↓</span>
-          </summary>
-          <div className="p-4 pt-0 border-t border-gray-50 bg-gray-50/10 text-xs text-gray-600">
-            <MistakesToAvoid mistakes={result.mistakes_to_avoid} />
-          </div>
-        </details>
-        <details className="group border border-gray-100 bg-white rounded-xl shadow-2xs overflow-hidden [&_summary::-webkit-details-marker]:hidden">
-          <summary className="flex justify-between items-center p-4 text-xs font-medium text-gray-700 cursor-pointer select-none hover:bg-gray-50 transition">
-            <span>🔄 Contingency Paths</span>
-            <span className="text-gray-400 transition group-open:rotate-180">↓</span>
-          </summary>
-          <div className="p-4 pt-0 border-t border-gray-50 bg-gray-50/10 text-xs text-gray-600">
-            <AlternativeActions actions={result.alternative_actions} />
-          </div>
-        </details>
-      </div>
-
-      {/* REFINEMENT FOOTER */}
-      <div className="space-y-4 pt-2 border-t border-gray-100">
-        {result.follow_up_questions?.length > 0 && (
           <div className="space-y-3">
-            <h2 className="text-xs font-semibold uppercase tracking-wider text-gray-400">Refine Analysis</h2>
-            <div className="space-y-2">
-              {result.follow_up_questions.map((question: string, index: number) => (
-                <div key={index} className="border border-blue-50 rounded-xl p-3 bg-blue-50/10">
-                  <p className="text-xs font-medium text-gray-700 mb-2">❓ {question}</p>
-                  <input
-                    type="text"
-                    placeholder="Provide additional details..."
-                    value={answers[question] || ""}
-                    onChange={(e) => setAnswers({ ...answers, [question]: e.target.value })}
-                    className="w-full text-xs border bg-white rounded-lg p-2 focus:outline-none focus:ring-1 focus:ring-blue-300 shadow-2xs"
-                  />
-                </div>
-              ))}
+            <div className="flex flex-col gap-1.5 pt-1">
+              <button type="button" onClick={() => handleSendCopilotMessage("What's my next priority?")} className="w-fit bg-white border border-gray-200 text-gray-700 px-3.5 py-1.5 rounded-xl text-xs font-medium shadow-3xs active:scale-95 transition">
+                🎯 What's my next priority?
+              </button>
+              <button type="button" onClick={() => handleSendCopilotMessage("Am I safe now?")} className="w-fit bg-white border border-gray-200 text-gray-700 px-3.5 py-1.5 rounded-xl text-xs font-medium shadow-3xs active:scale-95 transition">
+                🛡️ Am I safe now?
+              </button>
             </div>
-            <button onClick={onRefine} className="w-full rounded-xl bg-blue-600 py-2.5 text-xs font-medium text-white hover:bg-blue-700 shadow-xs transition">
-              Update Strategic Protocol
-            </button>
-          </div>
-        )}
 
-        <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-xs flex items-center justify-between gap-4">
-          <div>
-            <h3 className="text-xs font-medium text-gray-900">📄 Local Defensive Report</h3>
-            <p className="text-[11px] text-gray-400 mt-0.5">Persist report locally for completely offline access.</p>
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                handleSendCopilotMessage(chatInput);
+              }}
+              className="bg-white border border-gray-200 p-1.5 rounded-xl flex items-center gap-2 shadow-3xs"
+            >
+              <input
+                type="text"
+                value={chatInput}
+                onChange={(e) => setChatInput(e.target.value)}
+                placeholder="Type a custom query..."
+                className="flex-1 text-xs px-2.5 py-2 bg-transparent focus:outline-none"
+              />
+              <button type="submit" disabled={!chatInput.trim()} className="bg-gray-900 disabled:opacity-30 text-white px-4 py-2 rounded-lg text-xs font-semibold transition">
+                Send
+              </button>
+            </form>
           </div>
-          <button onClick={() => exportEmergencyReport(result, answers)} className="rounded-xl bg-gray-900 px-3.5 py-2 text-xs font-medium text-white hover:bg-gray-800 transition shadow-xs">
-            Save Offline
-          </button>
         </div>
+      )}
+
+      {/* STICKY BOTTOM TAB NAVIGATION FOOTER */}
+      <div className="fixed bottom-0 left-0 right-0 z-50 bg-white border-t border-gray-200/80 shadow-lg px-6 py-2.5 flex justify-around items-center max-w-lg mx-auto rounded-t-xl">
+        <button
+          onClick={() => setActiveTab("analyze")}
+          className={`flex flex-col items-center gap-0.5 text-xs font-medium transition active:scale-95 ${
+            activeTab === "analyze" ? "text-blue-600 font-semibold" : "text-gray-400 hover:text-gray-600"
+          }`}
+        >
+          <span className="text-lg">📊</span>
+          <span>Analyze</span>
+        </button>
+        <button
+          onClick={() => setActiveTab("copilot")}
+          className={`flex flex-col items-center gap-0.5 text-xs font-medium transition active:scale-95 ${
+            activeTab === "copilot" ? "text-red-600 font-semibold" : "text-gray-400 hover:text-gray-600"
+          }`}
+        >
+          <span className="text-lg">💬</span>
+          <span>Copilot</span>
+        </button>
       </div>
     </motion.div>
   );
