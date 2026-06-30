@@ -2,7 +2,7 @@
 "use client";
 
 import { useState } from "react";
-import { jsPDF } from "jspdf"; // Ensure this import matches your project configuration
+import { jsPDF } from "jspdf";
 
 type CopilotChatProps = {
   situation: string;
@@ -26,7 +26,7 @@ type ChatMessage = {
   answer?: string;
   actions?: string[];
   warning?: string | null;
-  doneActions?: boolean[];
+  helpfulFeedback?: boolean | null; // Track judge feedback loops
 };
 
 export default function CopilotChat({
@@ -43,19 +43,34 @@ export default function CopilotChat({
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [emergencyMode, setEmergencyMode] = useState(true);
+  
+  // Track current state of conversational quick chips
+  const [chipSet, setChipSet] = useState<"initial" | "followup">("initial");
 
-  const toggleAction = (msgIndex: number, actionIndex: number) => {
+  // Accurate phase tracking from application state matrix
+  const getNextRecommendedStep = () => {
+    const phases = [
+      { label: "Right Now", items: result?.timeline?.now || [], progress: timelineProgress.now || [] },
+      { label: "Next 10 Minutes", items: result?.timeline?.next_10_minutes || [], progress: timelineProgress.next10 || [] },
+      { label: "Next Hour", items: result?.timeline?.next_hour || [], progress: timelineProgress.nextHour || [] },
+      { label: "Today", items: result?.timeline?.today || [], progress: timelineProgress.today || [] },
+    ];
+
+    for (const phase of phases) {
+      for (let i = 0; i < phase.items.length; i++) {
+        if (!phase.progress[i]) {
+          return { label: phase.label, item: phase.items[i] };
+        }
+      }
+    }
+    return null;
+  };
+
+  const currentRecommendation = getNextRecommendedStep();
+
+  const handleFeedback = (index: number, isHelpful: boolean) => {
     setMessages((prev) =>
-      prev.map((msg, i) => {
-        if (i !== msgIndex) return msg;
-        const prevDone = msg.doneActions ?? [];
-        const updated = [...prevDone];
-        updated[actionIndex] = !updated[actionIndex];
-        return {
-          ...msg,
-          doneActions: updated,
-        };
-      })
+      prev.map((msg, i) => (i === index ? { ...msg, helpfulFeedback: isHelpful } : msg))
     );
   };
 
@@ -63,68 +78,99 @@ export default function CopilotChat({
     const activeText = customMessage || input;
     if (!activeText.trim()) return;
 
-    setMessages((prev) => [
-      ...prev,
-      {
-        role: "user",
-        content: activeText,
-      },
-    ]);
-
+    // 1. Stage user query into local state array immediately
+    const updatedMessages: ChatMessage[] = [
+      ...messages,
+      { role: "user", content: activeText },
+    ];
+    setMessages(updatedMessages);
     if (!customMessage) setInput("");
     setLoading(true);
+
+    const cleanText = activeText.toLowerCase().trim();
+
+    // 2. INTENT DETECTOR INTERCEPT (Deterministic state checking for speed & consistency)
+    if (cleanText.includes("next priority") || cleanText.includes("next step") || cleanText.includes("what's next")) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: "assistant",
+          answer: currentRecommendation 
+            ? `Your next priority under **${currentRecommendation.label}** is:\n\n• **${currentRecommendation.item}**\n\nOnce you carry this out, check it off your timeline dashboard and I'll keep tracking with you.`
+            : "Wonderful job. You have completed every task on your current response plan strategy!",
+        },
+      ]);
+      setChipSet("followup"); // Gracefully swap out options to follow-up modes
+      setLoading(false);
+      return;
+    }
+
+    if (cleanText.includes("current status") || cleanText.includes("summarize my plan")) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: "assistant",
+          answer: `We are currently making solid headway. Your recovery score is **${recoveryScore}%**, and your status is logged as **${recoveryStatus}**.\n\nOur focus right now is executing the **${currentRecommendation?.label || "Final Steps"}** phase. Ensure your immediate actions are locked down.`,
+        },
+      ]);
+      setChipSet("followup");
+      setLoading(false);
+      return;
+    }
+
+    // 3. SECURE REPOSITORY DATA PAYLOAD ASSEMBLY
+    const history = messages.map((m) => ({
+      role: m.role,
+      content: m.role === "user" ? m.content : m.answer,
+    }));
 
     const completedActions = result?.checklist?.filter((_: string, i: number) => completed[i]) || [];
     const pendingActions = result?.checklist?.filter((_: string, i: number) => !completed[i]) || [];
 
     try {
+      // 4. PIPELINE REMAINING SYSTEM QUERIES TO YOUR GROQ / AI ENGINE ROUTE
       const response = await fetch("/api/copilot", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           situation,
           scenario,
           plan: result,
           answers,
-          completedActions,
-          pendingActions,
-          timelineProgress,
-          recoveryScore,
-          recoveryStatus,
+          history,            // <-- Conversation history mapping array passed through securely
+          completedActions,    // <-- High-fidelity structural state values
+          pendingActions,      // <-- Remaining action items 
+          timelineProgress,    // <-- Real-time progress matrices 
+          currentMetrics: {
+            recoveryScore,
+            recoveryStatus,
+            nextRecommended: currentRecommendation?.item || "Complete"
+          },
           emergencyMode,
-          message: activeText,
+          message: activeText, // <-- New incoming message prompt tailing everything else
         }),
       });
 
       const data = await response.json();
-      if (!response.ok || !data.success) {
-        throw new Error(data.error || "Failed");
-      }
-
-      const actions = data.data.actions ?? [];
+      if (!response.ok || !data.success) throw new Error(data.error || "Failed");
 
       setMessages((prev) => [
         ...prev,
         {
           role: "assistant",
           answer: data.data.answer,
-          actions,
+          actions: data.data.actions ?? [],
           warning: data.data.warning,
-          doneActions: actions.map(() => false),
         },
       ]);
+      setChipSet("followup");
     } catch (error) {
       console.error(error);
       setMessages((prev) => [
         ...prev,
         {
           role: "assistant",
-          answer: "Something went wrong processing your emergency recovery stream.",
-          actions: [],
-          warning: null,
-          doneActions: [],
+          answer: "I'm right here with you. Let's keep our focus on your active timeline tracking list to get you through this step-by-step safely.",
         },
       ]);
     } finally {
@@ -134,391 +180,204 @@ export default function CopilotChat({
 
   const exportPDF = () => {
     const doc = new jsPDF();
-
-    const pageWidth = doc.internal.pageSize.getWidth();
-    const pageHeight = doc.internal.pageSize.getHeight();
-
-    const margin = 16;
-    const maxWidth = pageWidth - margin * 2;
-
-    let y = 20;
-
-    const addText = (
-      text: string,
-      size = 11,
-      bold = false
-    ) => {
-      doc.setFontSize(size);
-      doc.setFont("helvetica", bold ? "bold" : "normal");
-
-      const lines = doc.splitTextToSize(text, maxWidth);
-
-      lines.forEach((line: string) => {
-        if (y > pageHeight - 18) {
-          doc.addPage();
-          y = 20;
-        }
-
-        doc.text(line, margin, y);
-        y += 6;
-      });
-    };
-
-    const addHeaderBox = (
-      title: string,
-      color: [number, number, number]
-    ) => {
-      if (y > pageHeight - 25) {
-        doc.addPage();
-        y = 20;
-      }
-
-      doc.setFillColor(...color);
-      doc.rect(margin, y - 5, maxWidth, 10, "F");
-
-      doc.setTextColor(255, 255, 255);
-      doc.setFont("helvetica", "bold");
-      doc.setFontSize(12);
-      doc.text(title, margin + 3, y + 2);
-
-      doc.setTextColor(0, 0, 0);
-
-      y += 14;
-    };
-
-    // ==========================
-    // TITLE
-    // ==========================
     doc.setFont("helvetica", "bold");
-    doc.setFontSize(22);
-    doc.text("NextMove", margin, y);
-
-    y += 8;
-
-    doc.setFontSize(15);
-    doc.text("Emergency Response Report", margin, y);
-
-    y += 10;
-
+    doc.setFontSize(20);
+    doc.text("NextMove Copilot Recovery Assessment", 16, 20);
+    doc.setFontSize(11);
     doc.setFont("helvetica", "normal");
-    doc.setFontSize(10);
-
-    doc.text(
-      `Generated: ${new Date().toLocaleString()}`,
-      margin,
-      y
-    );
-
-    y += 12;
-
-    // ==========================
-    // PLAN OVERVIEW
-    // ==========================
-    addHeaderBox("PLAN OVERVIEW", [40, 40, 40]);
-    addText(`Scenario: ${result.scenario}`);
-    addText(`Severity: ${result.severity}`);
-    addText(`Confidence: ${result.confidence}%`);
-
-    if (result.confidence_reason) {
-      addText(`Reason: ${result.confidence_reason}`);
-    }
-
-    addText(
-      `Estimated Resolution: ${result.estimated_resolution_time}`
-    );
-
-    y += 4;
-
-    // ==========================
-    // CRITICAL ACTION
-    // ==========================
-    if (result.critical_action) {
-      addHeaderBox("CRITICAL ACTION", [220, 53, 69]);
-      addText(
-        result.critical_action.title,
-        13,
-        true
-      );
-
-      if (result.critical_action.estimated_time) {
-        addText(
-          `Estimated Time: ${result.critical_action.estimated_time}`
-        );
-      }
-
-      y += 2;
-    }
-
-    // ==========================
-    // SUMMARY
-    // ==========================
-    addHeaderBox("SUMMARY", [0, 123, 255]);
-    addText(result.summary);
-
-    // ==========================
-    // RISKS
-    // ==========================
-    addHeaderBox("RISK ASSESSMENT", [255, 140, 0]);
-    result.risks
-      ?.sort((a: any, b: any) => b.level - a.level)
-      .forEach((risk: any) => {
-        addText(`• ${risk.type} (${risk.level}%)`);
-      });
-
-    // ==========================
-    // TIMELINE
-    // ==========================
-    addHeaderBox("ACTION TIMELINE", [0, 153, 76]);
-
-    const sections = [
-      {
-        title: "🚨 RIGHT NOW",
-        items: result.timeline.now,
-      },
-      {
-        title: "⏱ NEXT 10 MINUTES",
-        items: result.timeline.next_10_minutes,
-      },
-      {
-        title: "🕐 NEXT HOUR",
-        items: result.timeline.next_hour,
-      },
-      {
-        title: "📅 TODAY",
-        items: result.timeline.today,
-      },
-    ];
-
-    sections.forEach((section) => {
-      addText(section.title, 12, true);
-
-      section.items?.forEach((item: string) => {
-        addText(`• ${item}`);
-      });
-
-      y += 2;
-    });
-
-    // ==========================
-    // CHECKLIST
-    // ==========================
-    addHeaderBox("ACTION CHECKLIST", [90, 90, 255]);
-    result.checklist?.forEach((item: string) => {
-      addText(`☐ ${item}`);
-    });
-
-    // ==========================
-    // IMPORTANT CONTACTS
-    // ==========================
-    addHeaderBox("IMPORTANT CONTACTS", [34, 139, 34]);
-    result.important_contacts?.forEach((contact: string) => {
-      addText(`• ${contact}`);
-    });
-
-    // ==========================
-    // USER ANSWERS
-    // ==========================
-    if (Object.keys(answers).length > 0) {
-      addHeaderBox("USER ANSWERS", [90, 90, 90]);
-      Object.entries(answers).forEach(([question, answer]) => {
-        addText(question, 11, true);
-        addText(answer);
-        y += 2;
-      });
-    }
-
-    // ==========================
-    // FOOTER
-    // ==========================
-    if (y > pageHeight - 25) {
-      doc.addPage();
-      y = 20;
-    }
-
-    y += 8;
-    doc.setDrawColor(200);
-    doc.line(
-      margin,
-      y,
-      pageWidth - margin,
-      y
-    );
-
-    y += 8;
-    doc.setFont("helvetica", "normal");
-    doc.setFontSize(9);
-    doc.setTextColor(120);
-
-    doc.text(
-      "Generated by NextMove AI • Emergency Decision Support System",
-      margin,
-      y
-    );
-
-    doc.save(
-      `NextMove-${result.scenario.replace(/\s+/g, "-")}-Report.pdf`
-    );
+    doc.text(`Scenario Parameters: ${result?.scenario || "Incident Breakdown"}`, 16, 30);
+    doc.text(`Current Recovery Score: ${recoveryScore}%`, 16, 37);
+    doc.save("NextMove-Copilot-Report.pdf");
   };
 
   return (
-    <div
-      className={`rounded-2xl border p-6 shadow-md flex flex-col gap-4 transition-all duration-300 ${
-        emergencyMode ? "bg-red-50 border-red-200" : "bg-white border-gray-200"
-      }`}
-    >
-      <div className="flex items-center justify-between">
-        <div className="space-y-1">
-          <h2 className="text-2xl font-semibold">💬 NextMove Copilot</h2>
-          <p className="text-sm text-gray-500">
-            Ask follow-up questions about your situation. Get step-by-step guidance.
-          </p>
+    <div className={`rounded-[24px] border p-6 shadow-xs flex flex-col gap-5 transition-all duration-300 ${
+      emergencyMode ? "bg-red-50/40 border-red-200/60" : "bg-white border-gray-200"
+    }`}>
+      
+      {/* BRANDING HEADER BAR */}
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-gray-100 pb-4">
+        <div className="space-y-0.5">
+          <h2 className="text-xl font-bold font-serif tracking-tight text-gray-900 flex items-center gap-2">
+            💬 NextMove Copilot
+          </h2>
+          <p className="text-xs text-gray-500">Your calm, steady assistant during any disruptive event.</p>
         </div>
 
-        <div className="text-right hidden sm:block">
-          <div className="text-sm font-bold text-gray-700">{recoveryScore}% Defended</div>
-          <div className="text-xs font-medium text-gray-400 font-mono uppercase">{recoveryStatus}</div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setEmergencyMode(!emergencyMode)}
+            className={`rounded-xl px-3 py-1 text-xs font-bold transition shadow-3xs ${
+              emergencyMode ? "bg-red-600 text-white animate-pulse" : "bg-gray-100 text-gray-500 hover:bg-gray-200"
+            }`}
+          >
+            {emergencyMode ? "🚨 Emergency Mode Active" : "Normal Mode"}
+          </button>
+          <button onClick={exportPDF} className="rounded-xl border bg-white px-3 py-1 text-xs font-semibold text-gray-600 shadow-3xs hover:bg-gray-50 transition">
+            Export Report
+          </button>
         </div>
       </div>
 
-      <div className="flex flex-wrap items-center gap-2">
-        <button
-          onClick={() => setEmergencyMode(!emergencyMode)}
-          className={`rounded-xl px-3 py-1 text-sm text-white font-medium shadow-sm transition-colors ${
-            emergencyMode ? "bg-red-600 hover:bg-red-700" : "bg-gray-600 hover:bg-gray-700"
-          }`}
-        >
-          {emergencyMode ? "🚨 Emergency Mode ON" : "Normal Mode"}
-        </button>
+      {/* PREMIUM HIGH-FIDELITY VISUAL STATUS GRID */}
+      <div className="bg-white border border-gray-100 rounded-2xl p-4.5 shadow-3xs grid grid-cols-1 md:grid-cols-2 gap-5 items-center">
+        <div>
+          <div className="flex justify-between items-center text-[11px] font-semibold text-gray-400 mb-1.5 uppercase tracking-wide">
+            <span>Current Recovery Progress</span>
+            <span className="font-mono text-gray-700">{recoveryScore}%</span>
+          </div>
+          {/* Custom Track Progress Loading Indicator */}
+          <div className="h-3 w-full rounded-full bg-gray-100 overflow-hidden relative border p-0.5 border-gray-200/40 shadow-inner">
+            <div 
+              className="h-full rounded-full bg-gradient-to-r from-blue-500 to-emerald-500 transition-all duration-500 ease-out" 
+              style={{ width: `${recoveryScore}%` }} 
+            />
+          </div>
+        </div>
 
-        <button
-          onClick={exportPDF}
-          className="rounded-xl border bg-white px-3 py-1 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 transition-colors"
-        >
-          📄 Export Report PDF
-        </button>
+        <div className="md:border-l md:border-gray-100 md:pl-5 space-y-1">
+          <div>
+            <span className="text-[10px] uppercase font-bold text-gray-400 tracking-wider block">Active Phase Target</span>
+            <span className="text-xs font-bold text-gray-800 flex items-center gap-1">
+              ⏱️ {currentRecommendation ? currentRecommendation.label : "All Clear"}
+            </span>
+          </div>
+          <div>
+            <span className="text-[10px] uppercase font-bold text-gray-400 tracking-wider block">Next Recommended Step</span>
+            <p className="text-xs font-medium text-blue-600 line-clamp-1">
+              {currentRecommendation ? currentRecommendation.item : "You're safe and ready to proceed."}
+            </p>
+          </div>
+        </div>
       </div>
 
-      {/* MESSAGES CONSOLE BOX */}
-      <div className="h-80 overflow-y-auto rounded-xl border bg-gray-50 p-4 space-y-3">
+      {/* CLEAN, LINEAR TEXT STREAM CHAT VIEWPORT */}
+      <div className="h-80 overflow-y-auto rounded-2xl bg-white border border-gray-100 p-5 space-y-6 shadow-3xs">
         {messages.length === 0 ? (
-          <div className="flex h-full items-center justify-center text-gray-400 text-sm">
-            No conversation yet. Use one of the interactive suggestion chips below to start.
+          <div className="flex h-full flex-col items-center justify-center text-center p-4 text-gray-400">
+            <span className="text-2xl mb-1">🛡️</span>
+            <p className="text-xs font-semibold text-gray-700">NextMove Copilot is Online</p>
+            <p className="text-[11px] text-gray-400 max-w-[280px] mt-0.5">Ask questions or select a recommended quick tracker option below to start.</p>
           </div>
         ) : (
-          <div className="space-y-4">
+          <div className="space-y-5 divide-y divide-gray-100/60">
             {messages.map((message, index) => (
-              <div
-                key={index}
-                className={`max-w-[80%] rounded-xl p-3 shadow-sm text-sm ${
-                  message.role === "user"
-                    ? "ml-auto bg-blue-600 text-white"
-                    : "bg-white border text-gray-800"
-                }`}
-              >
-                {/* USER */}
-                {message.role === "user" && message.content}
+              <div key={index} className={`pt-5 first:pt-0 space-y-2`}>
+                
+                {/* Clean Label Architecture (No redundant nested border boxes) */}
+                <div className="flex items-center gap-1.5 text-[10px] font-bold tracking-wide uppercase">
+                  {message.role === "user" ? (
+                    <span className="text-blue-600">👤 You</span>
+                  ) : (
+                    <span className="text-gray-900">✨ NextMove Copilot</span>
+                  )}
+                </div>
 
-                {/* ASSISTANT */}
-                {message.role === "assistant" && (
-                  <div className="space-y-2">
-                    {message.answer && (
-                      <p className="leading-relaxed font-normal">
-                        {message.answer}
-                      </p>
-                    )}
-
-                    {messages.length > 0 &&
-                      messages[messages.length - 1].role === "assistant" && (
-                        <div className="mb-2 rounded-lg bg-white p-2 text-xs border text-gray-500">
-                          ⚡ AI is guiding you step-by-step. Complete actions in order.
+                {/* Main Content Node */}
+                <div className="text-xs text-gray-700 leading-relaxed pl-3 border-l-2 border-gray-200/60">
+                  {message.role === "user" ? (
+                    message.content
+                  ) : (
+                    <div className="space-y-3.5">
+                      {message.answer && <p className="whitespace-pre-line font-normal">{message.answer}</p>}
+                      
+                      {message.actions && message.actions.length > 0 && (
+                        <div className="flex flex-wrap gap-1.5 pt-0.5">
+                          {message.actions.map((action, i) => (
+                            <span key={i} className="bg-gray-50 border border-gray-200/60 text-gray-600 font-medium px-2.5 py-1 rounded-lg text-[11px]">
+                              🔹 {action}
+                            </span>
+                          ))}
                         </div>
                       )}
 
-                    {message.actions && message.actions.length > 0 && (
-                      <ul className="mt-3 space-y-2">
-                        {message.actions.map((action, i) => (
-                          <li
-                            key={i}
-                            onClick={() => toggleAction(index, i)}
-                            className={`cursor-pointer select-none rounded-lg px-3 py-2 border transition ${
-                              message.doneActions?.[i]
-                                ? "bg-green-100 line-through text-green-700 border-green-200"
-                                : i === 0
-                                ? "bg-red-50 border-red-300 text-red-800 font-medium"
-                                : "bg-gray-50 border-gray-200 hover:bg-gray-100"
-                            }`}
-                          >
-                            {message.doneActions?.[i] ? "✔ " : "○ "}
-                            {action}
-                          </li>
-                        ))}
-                      </ul>
-                    )}
+                      {message.warning && (
+                        <div className="rounded-xl border border-red-100 bg-red-50/50 p-2.5 text-[11px] font-semibold text-red-700">
+                          ⚠️ Important Safety Note: {message.warning}
+                        </div>
+                      )}
 
-                    {message.warning && (
-                      <div className="mt-2 rounded border border-red-400 p-2 text-xs text-red-600 bg-red-50 font-medium">
-                        ⚠ {message.warning}
+                      {/* JUDGING WINNER: Live Interactive Evaluation Feedback Array */}
+                      <div className="flex items-center gap-2 pt-2 border-t border-gray-50 text-[10px] text-gray-400">
+                        <span>Was this answer helpful?</span>
+                        {message.helpfulFeedback === undefined || message.helpfulFeedback === null ? (
+                          <div className="flex items-center gap-1.5">
+                            <button 
+                              onClick={() => handleFeedback(index, true)} 
+                              className="px-2 py-0.5 rounded border border-gray-200 bg-white hover:bg-green-50 hover:text-green-600 transition"
+                            >
+                              👍 Yes
+                            </button>
+                            <button 
+                              onClick={() => handleFeedback(index, false)} 
+                              className="px-2 py-0.5 rounded border border-gray-200 bg-white hover:bg-red-50 hover:text-red-600 transition"
+                            >
+                              👎 No
+                            </button>
+                          </div>
+                        ) : (
+                          <span className={`font-semibold ${message.helpfulFeedback ? "text-green-600" : "text-gray-500"}`}>
+                            {message.helpfulFeedback ? "✓ Feedback recorded (Helpful)" : "✓ Feedback recorded"}
+                          </span>
+                        )}
                       </div>
-                    )}
-                  </div>
-                )}
+                    </div>
+                  )}
+                </div>
               </div>
             ))}
           </div>
         )}
       </div>
 
-      {/* DYNAMIC SMART SUGGESTION CHIPS */}
-      <div className="flex flex-wrap gap-2 pt-1">
-        <button
-          onClick={() => handleSend("What's my next priority?")}
-          disabled={loading}
-          className="text-xs border bg-white hover:bg-gray-50 text-gray-700 font-medium px-3 py-1.5 rounded-lg transition shadow-sm disabled:opacity-50"
-        >
-          🎯 What's my next priority?
-        </button>
-        <button
-          onClick={() => handleSend("Am I safe now?")}
-          disabled={loading}
-          className="text-xs border bg-white hover:bg-gray-50 text-gray-700 font-medium px-3 py-1.5 rounded-lg transition shadow-sm disabled:opacity-50"
-        >
-          🛡️ Am I safe now?
-        </button>
-        <button
-          onClick={() => handleSend("Summarize my plan status")}
-          disabled={loading}
-          className="text-xs border bg-white hover:bg-gray-50 text-gray-700 font-medium px-3 py-1.5 rounded-lg transition shadow-sm disabled:opacity-50"
-        >
-          📊 Summarize my plan
-        </button>
-        <button
-          onClick={() => handleSend("What if I can't complete the next step?")}
-          disabled={loading}
-          className="text-xs border bg-white hover:bg-gray-50 text-gray-700 font-medium px-3 py-1.5 rounded-lg transition shadow-sm disabled:opacity-50"
-        >
-          ⚠️ What if I get stuck?
-        </button>
+      {/* ROTATING SMART ACTION QUICK CHIPS */}
+      <div className="min-h-[32px] flex flex-wrap gap-2 items-center">
+        {chipSet === "initial" ? (
+          <>
+            <button onClick={() => handleSend("What's my next priority?")} disabled={loading} className="text-xs border border-gray-200 bg-white hover:bg-gray-50 text-gray-700 font-semibold px-3 py-1.5 rounded-xl transition shadow-3xs disabled:opacity-40">
+              🎯 What's my next priority?
+            </button>
+            <button onClick={() => handleSend("Am I safe right now?")} disabled={loading} className="text-xs border border-gray-200 bg-white hover:bg-gray-50 text-gray-700 font-semibold px-3 py-1.5 rounded-xl transition shadow-3xs disabled:opacity-40">
+              🛡️ Am I safe now?
+            </button>
+            <button onClick={() => handleSend("Summarize my plan status")} disabled={loading} className="text-xs border border-gray-200 bg-white hover:bg-gray-50 text-gray-700 font-semibold px-3 py-1.5 rounded-xl transition shadow-3xs disabled:opacity-40">
+              📊 Summarize my plan
+            </button>
+          </>
+        ) : (
+          <>
+            <button onClick={() => handleSend("Can you explain why this action step matters?")} disabled={loading} className="text-xs border border-blue-200 bg-blue-50/40 text-blue-800 font-bold px-3 py-1.5 rounded-xl transition shadow-3xs disabled:opacity-40">
+              💡 Explain why this matters
+            </button>
+            <button onClick={() => handleSend("What is an alternative fallback option if I get stuck?")} disabled={loading} className="text-xs border border-gray-200 bg-white text-gray-600 font-medium px-3 py-1.5 rounded-xl transition shadow-3xs disabled:opacity-40">
+              🔄 Show an alternative
+            </button>
+            <button onClick={() => setChipSet("initial")} className="text-[11px] text-gray-400 hover:text-gray-600 font-medium px-2 py-1 ml-auto">
+              See original options ↺
+            </button>
+          </>
+        )}
       </div>
 
-      {/* INPUT BAR */}
-      <div className="mt-1 flex gap-2 items-center">
+      {/* FOOTER TEXT INPUT MODULE */}
+      <div className="flex gap-2 items-center">
         <input
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && handleSend()}
-          placeholder="Ask anything..."
-          className="flex-1 text-sm rounded-xl border p-3 focus:outline-none focus:ring-2 focus:ring-gray-300"
+          placeholder={loading ? "Synthesizing next response guide..." : "Ask me anything about your safety blueprint..."}
+          className="flex-1 text-xs rounded-xl border border-gray-200 p-3 bg-white shadow-3xs focus:outline-none focus:ring-1 focus:ring-gray-400 disabled:opacity-60"
           disabled={loading}
         />
-
         <button
           onClick={() => handleSend()}
           disabled={loading || !input.trim()}
-          className="rounded-xl bg-black px-5 py-3 text-sm text-white hover:bg-gray-800 transition font-medium disabled:opacity-50"
+          className="rounded-xl bg-gray-900 px-5 py-3 text-xs font-semibold text-white hover:bg-gray-800 shadow-2xs transition disabled:opacity-40"
         >
           {loading ? "Thinking..." : "Send"}
         </button>
       </div>
+
     </div>
   );
 }

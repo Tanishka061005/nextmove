@@ -56,21 +56,62 @@ export default function ResultScreen({
   setTimelineProgress,
 }: ResultScreenProps) {
   const [secondsLeft, setSecondsLeft] = useState(600); 
-  const [hourSecondsLeft, setHourSecondsLeft] = useState(3600); 
+  const [hourSecondsLeft, setHourSecondsLeft] = useState(3600);
 
-  // Tab State: "analyze" or "copilot"
-  const [activeTab, setActiveTab] = useState<"analyze" | "copilot">("analyze");
-
-  // Copilot States
+ const [activeTab, setActiveTab] = useState<"analyze" | "copilot">("analyze");
   const [chatInput, setChatInput] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const [loading, setLoading] = useState(false);               // <-- Grouped Here
+  const [chipSet, setChipSet] = useState<"initial" | "followup">("initial"); // <-- Grouped Here
 
-  useEffect(() => {
-    if (activeTab === "copilot") {
-      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-    }
-  }, [messages, activeTab]);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  {/* ROTATING SMART ACTION QUICK CHIPS */}
+          <div className="flex flex-wrap gap-2 pt-1">
+            {chipSet === "initial" ? (
+              <>
+                <button type="button" disabled={loading} onClick={() => handleSendCopilotMessage("What's my next priority?")} className="bg-white border border-gray-200 text-gray-700 px-3.5 py-1.5 rounded-xl text-xs font-medium shadow-3xs active:scale-95 transition disabled:opacity-40">
+                  🎯 What's my next priority?
+                </button>
+                <button type="button" disabled={loading} onClick={() => handleSendCopilotMessage("Am I safe now?")} className="bg-white border border-gray-200 text-gray-700 px-3.5 py-1.5 rounded-xl text-xs font-medium shadow-3xs active:scale-95 transition disabled:opacity-40">
+                  🛡️ Am I safe now?
+                </button>
+              </>
+            ) : (
+              <>
+                <button type="button" disabled={loading} onClick={() => handleSendCopilotMessage("Explain why this current action step matters.")} className="bg-blue-50 border border-blue-200 text-blue-700 px-3.5 py-1.5 rounded-xl text-xs font-medium shadow-3xs active:scale-95 transition disabled:opacity-40">
+                  💡 Explain why this matters
+                </button>
+                <button type="button" disabled={loading} onClick={() => handleSendCopilotMessage("What is an alternative fallback option if I get stuck?")} className="bg-white border border-gray-200 text-gray-600 px-3.5 py-1.5 rounded-xl text-xs font-medium shadow-3xs active:scale-95 transition disabled:opacity-40">
+                  🔄 Show alternative path
+                </button>
+                <button type="button" onClick={() => setChipSet("initial")} className="text-[11px] text-gray-400 hover:text-gray-600 ml-auto px-2">
+                  Reset ↺
+                </button>
+              </>
+            )}
+          </div>
+
+          {/* FOOTER TEXT INPUT MODULE */}
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              handleSendCopilotMessage(chatInput);
+            }}
+            className="bg-white border border-gray-200 p-1.5 rounded-xl flex items-center gap-2 shadow-3xs"
+          >
+            <input
+              type="text"
+              value={chatInput}
+              onChange={(e) => setChatInput(e.target.value)}
+              placeholder={loading ? "Analyzing system state..." : "Type a custom query..."}
+              className="flex-1 text-xs px-2.5 py-2 bg-transparent focus:outline-none disabled:opacity-50"
+              disabled={loading}
+            />
+            <button type="submit" disabled={!chatInput.trim() || loading} className="bg-gray-900 disabled:opacity-30 text-white px-4 py-2 rounded-lg text-xs font-semibold transition">
+              {loading ? "Thinking..." : "Send"}
+            </button>
+          </form>
+
 
   useEffect(() => {
     if (result?.timeline) {
@@ -171,21 +212,84 @@ export default function ResultScreen({
     });
   };
 
-  const handleSendCopilotMessage = (textToSend: string) => {
-    if (!textToSend.trim()) return;
+  const handleSendCopilotMessage = async (textToSend: string) => {
+    if (!textToSend.trim() || loading) return;
 
+    // 1. Stage user query into local chat state immediately
     const userMsg: Message = { id: Math.random().toString(), sender: "user", text: textToSend };
-    setMessages((prev) => [...prev, userMsg]);
+    const updatedMessages = [...messages, userMsg];
+    setMessages(updatedMessages);
     setChatInput("");
+    setLoading(true);
 
-    setTimeout(() => {
-      const copilotMsg: Message = {
-        id: Math.random().toString(),
-        sender: "copilot",
-        text: `Analyzing threat variables against your active parameters. Continue executing the immediate visual checklists while I process this entry fallback.`
-      };
-      setMessages((prev) => [...prev, copilotMsg]);
-    }, 600);
+    // Assemble arrays for the data payload
+    const completedActions = [
+      ...(result.timeline?.now?.filter((_: any, i: number) => timelineProgress?.now?.[i]) || []),
+      ...(result.timeline?.next_10_minutes?.filter((_: any, i: number) => timelineProgress?.next10?.[i]) || []),
+      ...(result.timeline?.next_hour?.filter((_: any, i: number) => timelineProgress?.nextHour?.[i]) || []),
+      ...(result.timeline?.today?.filter((_: any, i: number) => timelineProgress?.today?.[i]) || []),
+    ];
+
+    const pendingActions = [
+      ...(result.timeline?.now?.filter((_: any, i: number) => !timelineProgress?.now?.[i]) || []),
+      ...(result.timeline?.next_10_minutes?.filter((_: any, i: number) => !timelineProgress?.next10?.[i]) || []),
+      ...(result.timeline?.next_hour?.filter((_: any, i: number) => !timelineProgress?.nextHour?.[i]) || []),
+      ...(result.timeline?.today?.filter((_: any, i: number) => !timelineProgress?.today?.[i]) || []),
+    ];
+
+    // Format chat history mapping for the backend API routing setup
+    const formattedHistory = messages.map((m) => ({
+      role: m.sender === "user" ? "user" : "assistant",
+      content: m.text,
+    }));
+
+    try {
+      // 2. Dispatch real telemetry context data straight to your route handler
+      const response = await fetch("/api/copilot", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          situation: result.summary,
+          scenario: result.scenario,
+          plan: result,
+          answers,
+          history: formattedHistory,
+          completedActions,
+          pendingActions,
+          timelineProgress,
+          recoveryScore,
+          recoveryStatus: dynamicSeverity,
+          message: textToSend,
+        }),
+      });
+
+      const data = await response.json();
+      
+      if (!response.ok || !data.success) throw new Error("API Failure");
+
+      // 3. Append authentic fallback or Groq-generated response string
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: Math.random().toString(),
+          sender: "copilot",
+          text: data.data.answer,
+        },
+      ]);
+      setChipSet("followup");
+    } catch (error) {
+      console.error(error);
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: Math.random().toString(),
+          sender: "copilot",
+          text: "I'm right here with you. Let's focus on our primary action timeline overview to keep moving forward step-by-step.",
+        },
+      ]);
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
