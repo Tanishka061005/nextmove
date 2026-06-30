@@ -4,7 +4,6 @@ import { exportEmergencyReport } from "@/lib/exportEmergencyReport";
 import StickyCriticalAction from "@/components/StickyCriticalAction";
 import { useEffect, useState } from "react";
 import EmergencyProgress from "./EmergencyProgress";
-import RecoveryMilestone from "./RecoveryMilestone";
 import SituationUpdates from "@/components/SituationUpdates";
 import DecisionReasoning from "@/components/DecisionReasoning";
 import AlternativeActions from "@/components/AlternativeActions";
@@ -18,6 +17,7 @@ type ResultScreenProps = {
   answers: Record<string, string>;
   setAnswers: React.Dispatch<React.SetStateAction<Record<string, string>>>;
   onRefine: () => void;
+  onReset: () => void;
   isRefined: boolean;
   previousConfidence: number | null;
   completed: boolean[];
@@ -41,6 +41,7 @@ export default function ResultScreen({
   answers,
   setAnswers,
   onRefine,
+  onReset,
   isRefined,
   previousConfidence,
   completed,
@@ -48,8 +49,8 @@ export default function ResultScreen({
   timelineProgress,
   setTimelineProgress,
 }: ResultScreenProps) {
-  const [secondsLeft, setSecondsLeft] = useState(600); // 10 minutes
-  const [hourSecondsLeft, setHourSecondsLeft] = useState(3600); // 60 minutes
+  const [secondsLeft, setSecondsLeft] = useState(600); 
+  const [hourSecondsLeft, setHourSecondsLeft] = useState(3600); 
 
   useEffect(() => {
     if (result?.timeline) {
@@ -62,7 +63,6 @@ export default function ResultScreen({
     }
   }, [result, setTimelineProgress]);
 
-  // Compute milestones safely (if an AI section is empty, consider it automatically complete so it doesn't block progression)
   const hasNow = result?.timeline?.now?.length > 0;
   const nowComplete = !hasNow || (timelineProgress.now.length > 0 && timelineProgress.now.every(Boolean));
 
@@ -75,9 +75,8 @@ export default function ResultScreen({
   const hasToday = result?.timeline?.today?.length > 0;
   const todayComplete = !hasToday || (timelineProgress.today.length > 0 && timelineProgress.today.every(Boolean));
 
-  // 10-Minute Timer logic
   useEffect(() => {
-    if (next10Complete) return; // Freeze timer if completed
+    if (next10Complete) return; 
 
     const interval = setInterval(() => {
       setSecondsLeft((prev) => (prev > 0 ? prev - 1 : 0));
@@ -85,9 +84,8 @@ export default function ResultScreen({
     return () => clearInterval(interval);
   }, [next10Complete]);
 
-  // 1-Hour Timer logic (Starts only when next10 is complete)
   useEffect(() => {
-    if (!next10Complete || nextHourComplete) return; // Don't start until unlocked, freeze when done
+    if (!next10Complete || nextHourComplete) return; 
 
     const interval = setInterval(() => {
       setHourSecondsLeft((prev) => (prev > 0 ? prev - 1 : 0));
@@ -162,14 +160,22 @@ export default function ResultScreen({
       {/* EMERGENCY STATUS HERO DASHBOARD */}
       <AnimatedCard delay={0.05}>
         <div className="rounded-2xl border border-gray-100 bg-white p-6 shadow-xs">
-          <div className="flex items-center justify-between border-b border-gray-100 pb-4 mb-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-gray-100 pb-4 mb-4 gap-3">
             <div>
               <span className="text-[10px] font-semibold uppercase tracking-wider text-gray-400">Current Protocol</span>
               <h1 className="text-xl font-bold tracking-tight text-gray-900">{result.scenario}</h1>
             </div>
-            <span className={`rounded-full px-2.5 py-1 text-xs font-semibold border ${severityColor}`}>
-              Status: {dynamicSeverity}
-            </span>
+            <div className="flex items-center gap-2">
+              <button 
+                onClick={onReset}
+                className="rounded-full border border-gray-200 bg-white px-3 py-1 text-xs font-medium text-gray-600 hover:bg-gray-50 active:scale-95 transition shadow-2xs"
+              >
+                🔄 New Analysis
+              </button>
+              <span className={`rounded-full px-2.5 py-1 text-xs font-semibold border ${severityColor}`}>
+                Status: {dynamicSeverity}
+              </span>
+            </div>
           </div>
 
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-xs">
@@ -239,7 +245,6 @@ export default function ResultScreen({
             )}
           </AnimatePresence>
 
-          {/* TIMER ADDED HERE */}
           <TimelineSection
             title="🕐 Next Hour"
             items={result.timeline?.next_hour}
